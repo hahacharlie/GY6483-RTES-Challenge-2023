@@ -1,0 +1,14 @@
+#define OUT_X_L 0x28
+#define CTRL_REG1 0x20
+#define CTRL_REG1_CONFIG 0b01'10'1'1'1'1
+#define CTRL_REG4 0x23
+#define CTRL_REG4_CONFIG 0b0'01'0'00'0
+#define SPI_FLAG 1
+#define DATA_READY_FLAG 2
+#define CTRL_REG3 0x22
+#define CTRL_REG3_CONFIG 0b0'0'0'0'1'000
+#define SCALING_FACTOR (17.5f * 0.017453292519943295769236907684886f / 1000.0f)
+
+
+// Bit shifting snippet
+(((uint16_t)read_buf[2]) << 8) | ((uint16_t)read_buf[1])
