@@ -38,6 +38,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f429i_discovery_ts.h"
 #include "stm32f429i_discovery_io.h"
+#include <stmpe811.h>
 
 /** @addtogroup BSP
   * @{
