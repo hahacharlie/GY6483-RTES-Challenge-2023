@@ -1,77 +1,122 @@
 #include <mbed.h>
-#include <stdio.h>
+#include <vector>
 #include "gyro.h"
-#include "file_system.h"
-#include "button.h"
+// #include "button.h"
+// #include "drivers/LCD_DISCO_F429ZI.h"
 
-#define RECORD_FLAG 1
-#define ERASE_FLAG 2
-#define DATA_RDY_FLAG 3
-#define STOP_FLAG 4
+// Event flags
+#define KEY_FLAG 1
+#define DATA_READY_FLAG 2
+#define UNLOCK_FLAG 3
+#define ERASE_FLAG 4
+// Timeout values in milliseconds for button events
+#define SINGLE_CLICK_TIMEOUT 200
+#define DOUBLE_CLICK_TIMEOUT 500
+#define LONG_PRESS_TIMEOUT 1000
+// Debounce timeout in milliseconds
+#define DEBOUNCE_TIMEOUT 20
 
-InterruptIn gyro_int(PA_2, PullDown);
-EventFlags flags;
+InterruptIn gyro_int2(PA_2, PullDown);
+InterruptIn user_button(USER_BUTTON, PullDown);
 
-// An extended button API
-Button button(USER_BUTTON);
+EventFlags button_flags;
 
+Timer timer;
+
+// /*******************************************************************************
+//  *
+//  * @brief Button state machine states
+//  *
+//  * ****************************************************************************/
+// typedef enum
+// {
+//     BUTTON_STATE_IDLE,
+//     BUTTON_STATE_WAIT_DEBOUNCE,
+//     BUTTON_STATE_PRESSED,
+//     BUTTON_STATE_WAIT_RELEASE
+// } button_state_t;
+
+// Button state variable
+// volatile button_state_t button_state = BUTTON_STATE_IDLE;
+
+/*******************************************************************************
+ * Function Prototypes of Threads
+ * ****************************************************************************/
+void gyroscope_thread();
+
+/*******************************************************************************
+ * Function Prototypes of Flash
+ * ****************************************************************************/
+bool storeGyroDataToFlash(vector<array<float, 3>> &gesture_key, uint32_t flash_address);
+vector<array<float, 3>> readGyroDataFromFlash(uint32_t flash_address, size_t data_size);
+
+/*******************************************************************************
+ * Function Prototypes of filters
+ * ****************************************************************************/
 // moving average filter will be defined after main()
-float movingAverageFilter(float input, float buffer[], size_t N, size_t &index, float &sum);
+// float movingAverageFilter(float input, float buffer[], size_t N, size_t &index, float &sum);
 
-// double click to start recording
-void onDoubleClick()
+/*******************************************************************************
+ * ISR Callback Functions
+ * ****************************************************************************/
+// Callback function for button press
+// void button_press(); // defined after main()
+// Call back function for button press
+void button_press()
 {
-    flags.set(RECORD_FLAG);
+    button_flags.set(KEY_FLAG);
 }
-
-// long press to erase
-void onLongPress()
-{
-    flags.set(ERASE_FLAG);
-}
-
-// click button, stop recording
-void onClick()
-{
-    flags.set(STOP_FLAG);
-}
-
-// data ready
+// Gyrscope data ready ISR
 void onGyroDataReady()
 {
-    flags.set(DATA_RDY_FLAG);
+    button_flags.set(DATA_READY_FLAG);
 }
 
+/*******************************************************************************
+ * @brief Variables
+ * ****************************************************************************/
+// Create a vector to store gyroscope data
+vector<array<float, 3>> gesture_key;
+vector<array<float, 3>> unlocking_record;
+
+/*******************************************************************************
+ * @brief main function
+ * ****************************************************************************/
 int main()
 {
-    // setup gyroscope's initialization parameters
+    // initialize all interrupts
+    user_button.rise(&button_press);
+    gyro_int2.rise(&onGyroDataReady);
+
+    ThisThread::sleep_for(1s);
+
+    // Create the gyroscope thread
+    Thread key_saving;
+    key_saving.start(callback(gyroscope_thread));
+    printf("Gesture Key recording started\r\n");
+
+    while (1)
+    {
+        ThisThread::sleep_for(100ms);
+    }
+}
+
+/*******************************************************************************
+ *
+ * @brief gyroscope gesture key saving thread
+ *
+ * ****************************************************************************/
+// Function definition for the gyroscope thread task
+void gyroscope_thread()
+{
+    // Add your gyroscope initialization parameters here
     Gyroscope_Init_Parameters init_parameters;
     init_parameters.conf1 = ODR_200_CUTOFF_50;
     init_parameters.conf3 = INT2_DRDY;
     init_parameters.conf4 = FULL_SCALE_500;
 
-    // setup gyroscope's raw data
+    // Set up gyroscope's raw data
     Gyroscope_RawData raw_data;
-
-    // attach ISR for button click
-    button.onClick(&onClick);
-    // attach ISR for button double click
-    button.onDoubleClick(&onDoubleClick);
-    // attach ISR for button long press
-    button.onLongClick(&onLongPress);
-
-    // gyroscope raw data
-    Gyroscope_RawData raw_data;
-
-    float record[3] = {0.0f, 0.0f, 0.0f}; // record data gx, gy, gz
-
-    // open the file system to check if there is a gesture key file
-    MountFileSystem(); 
-    // TODO: Seek if there is a already stored gesture key file in the file system
-    UnmountFileSystem();
-
-    // configure the interrupt pin
-    gyro_int.rise(&onGyroDataReady);
 
     // The gyroscope sensor keeps its configuration between power cycles.
     // This means that the gyroscope will already have it's data-ready interrupt
@@ -79,58 +124,159 @@ int main()
     // the pin level rising before we have configured our interrupt handler.
     // To account for this, we manually check the signal and set the flag
     // for the first sample.
-    if (!(flags.get() & DATA_RDY_FLAG) && (gyro_int.read() == 1))
+    if (!(button_flags.get() & DATA_READY_FLAG) && (gyro_int2.read() == 1))
     {
-        flags.set(DATA_RDY_FLAG);
+        button_flags.set(DATA_READY_FLAG);
     }
-
-    int index_counter = 0;
 
     while (1)
     {
-        float gx, gy, gz; // temp holder for calcualted gyro data
+        auto flags = button_flags.wait_all(KEY_FLAG);
+        // Initiate gyroscope
+        InitiateGyroscope(&init_parameters, &raw_data);
 
-        flags.wait_all(RECORD_FLAG, osWaitForever, false); // wait for double click to start recording
-        InitiateGyroscope(&init_parameters, &raw_data);    // initiate gyroscope
-        MountFileSystem();                                 // mount file system
+        printf("========[Recording initializing...]========\r\n");
 
-        flags.wait_all(DATA_RDY_FLAG); // wait for data ready
-        GetCalibratedRawData();        // get calibrated raw data
+        timer.start();
+        while (timer.elapsed_time() < 5s)
+        {
+            // Wait for the gyroscope data to be ready
+            button_flags.wait_all(DATA_READY_FLAG);
+            // Read the data from the gyroscope
+            GetCalibratedRawData();
+            // Add the converted data to the gesture_key vector
+            gesture_key.push_back({ConvertToDPS(raw_data.x_raw), ConvertToDPS(raw_data.y_raw), ConvertToDPS(raw_data.z_raw)});
+            ThisThread::sleep_for(100ms); // 10Hz
+        }
 
-        // convert raw data to dps
-        gx = ((float)raw_data.x_raw) * (17.5f * 0.017453292519943295769236907684886f / 1000.0f);
-        gy = ((float)raw_data.y_raw) * (17.5f * 0.017453292519943295769236907684886f / 1000.0f);
-        gz = ((float)raw_data.z_raw) * (17.5f * 0.017453292519943295769236907684886f / 1000.0f);
+        timer.stop();  // Stop timer
+        timer.reset(); // Reset timer
 
-        // write data to file
-        WriteFile(gx, index_counter);
-        index_counter++;
-        WriteFile(gy, index_counter);
-        index_counter++;
-        WriteFile(gz, index_counter);
-        index_counter++;
+        printf("========[Recording finish.]========\r\n");
 
-        // wait for 50ms
-        ThisThread::sleep_for(50ms); 
+        ThisThread::sleep_for(1s);
 
-        flags.wait_all(STOP_FLAG); // wait for click to stop recording
-        PowerOff();                // turn off gyroscope
-        UnmountFileSystem();       // unmount file system
-        flags.clear(RECORD_FLAG);  // clear record flag
+        // Print the data
+        printf("========[Printing data from guesture key...]========\r\n");
+        printf("There are %d data in the vector.\r\n", gesture_key.size());
+        for (size_t i = 0; i < gesture_key.size(); i++)
+        {
+            printf("x: %f, y: %f, z: %f\r\n", gesture_key[i][0], gesture_key[i][1], gesture_key[i][2]);
+        }
+        printf("========[Printing finish.]========\r\n");
+
+        ThisThread::sleep_for(100ms);
     }
 }
 
-float movingAverageFilter(float input, float buffer[], size_t N, size_t &index, float &sum) {
-    // Remove oldest value from sum
-    sum -= buffer[index];
+/*******************************************************************************
+ *
+ * @brief store data to flash
+ * @param gesture_key: the data to store
+ * @param flash_address: the address of the flash to store
+ * @return true if the data is stored successfully, false otherwise
+ *
+ * ****************************************************************************/
+bool storeGyroDataToFlash(vector<array<float, 3>> &gesture_key, uint32_t flash_address)
+{
+    FlashIAP flash;
+    flash.init();
 
-    // Add new value to buffer and sum
-    buffer[index] = input;
-    sum += input;
+    // Calculate the total size of the data to be stored in bytes
+    uint32_t data_size = gesture_key.size() * sizeof(array<float, 3>);
 
-    // Increment index, wrap around if needed
-    index = (index + 1) % N;
+    // Erase the flash sector
+    flash.erase(flash_address, data_size);
 
-    // Return average
-    return sum / static_cast<float>(N);
+    // Write the data to flash
+    int write_result = flash.program(gesture_key.data(), flash_address, data_size);
+
+    flash.deinit();
+
+    return write_result == 0;
 }
+
+/*******************************************************************************
+ *
+ * @brief read data from flash
+ * @param flash_address: the address of the flash to read
+ * @param data_size: the size of the data to read in bytes
+ * @return a vector of array<float, 3> containing the data
+ *
+ * ****************************************************************************/
+vector<array<float, 3>> readGyroDataFromFlash(uint32_t flash_address, size_t data_size)
+{
+    vector<array<float, 3>> gesture_key(data_size);
+
+    FlashIAP flash;
+    flash.init();
+
+    // Read the data from flash
+    flash.read(gesture_key.data(), flash_address, data_size * sizeof(array<float, 3>));
+
+    flash.deinit();
+
+    return gesture_key;
+}
+
+// /*******************************************************************************
+//  *
+//  * @brief button press ISR
+//  *
+//  * ****************************************************************************/
+// void button_press()
+// {
+//     static Timer timer;
+//     static unsigned int press_count = 0;
+
+//     switch (button_state)
+//     {
+//     case BUTTON_STATE_IDLE:
+//         button_state = BUTTON_STATE_WAIT_DEBOUNCE;
+//         timer.start();
+//         break;
+//     case BUTTON_STATE_WAIT_DEBOUNCE:
+//         if (timer.elapsed_time().count() >= DEBOUNCE_TIMEOUT)
+//         {
+//             button_state = BUTTON_STATE_PRESSED;
+//             timer.reset();
+//         }
+//         break;
+//     case BUTTON_STATE_PRESSED:
+//         if (timer.elapsed_time().count() >= LONG_PRESS_TIMEOUT)
+//         {
+//             button_flags.set(ERASE_FLAG);
+//             press_count = 0;
+//             timer.stop();
+//             timer.reset();
+//             button_state = BUTTON_STATE_WAIT_RELEASE;
+//         }
+//         else if (user_button)
+//         {
+//             press_count++;
+//             button_state = BUTTON_STATE_WAIT_RELEASE;
+//         }
+//         break;
+//     case BUTTON_STATE_WAIT_RELEASE:
+//         if (user_button)
+//         {
+//             if (press_count == 2)
+//             {
+//                 button_flags.set(KEY_FLAG);
+//                 press_count = 0;
+//                 timer.stop();
+//                 timer.reset();
+//             }
+//             else if (press_count == 1)
+//             {
+//                 ThisThread::sleep_for(SINGLE_CLICK_TIMEOUT);
+//                 button_flags.set(UNLOCK_FLAG);
+//                 press_count = 0;
+//                 timer.stop();
+//                 timer.reset();
+//             }
+//             button_state = BUTTON_STATE_IDLE;
+//         }
+//         break;
+//     }
+// }

@@ -130,6 +130,13 @@ void InitiateGyroscope(Gyroscope_Init_Parameters *init_parameters, Gyroscope_Raw
   printf("========[Initiation finish.]========\r\n");
 }
 
+// convert raw data to dps
+float ConvertToDPS(int16_t axis_data)
+{
+  float dps = axis_data * sensitivity;
+  return dps;
+}
+
 // convert dps to linear velocity
 float ConvertToVelocity(int16_t axis_data)
 {

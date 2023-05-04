@@ -51,7 +51,7 @@ void Button::onButtonRelease()
 
         if (previousClick)
         {
-            // previos click withing double click time span -> its a double click
+            // previos click within double click time span -> its a double click
             onDoubleClickHandler();
 
             // stop timeout

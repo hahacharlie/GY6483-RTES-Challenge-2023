@@ -149,6 +149,9 @@ void CalibrateGyroscope(Gyroscope_RawData *rawdata);
 // Gyroscope initialization
 void InitiateGyroscope(Gyroscope_Init_Parameters *init_parameters, Gyroscope_RawData *init_raw_data);
 
+// Data conversion: raw -> dps
+float ConvertToDPS(int16_t rawdata);
+
 // Data conversion: dps -> m/s
 float ConvertToVelocity(int16_t rawdata);
 
