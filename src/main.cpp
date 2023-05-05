@@ -22,7 +22,9 @@ InterruptIn user_button(USER_BUTTON, PullDown);
 LCD_DISCO_F429ZI lcd;
 TS_DISCO_F429ZI ts;
 
-EventFlags button_flags;
+InterruptIn touch_int(PA_15);
+
+EventFlags flags;
 
 Timer timer;
 
@@ -69,12 +71,17 @@ float movingAverageFilter(float input, float buffer[], size_t N, size_t &index, 
 // Callback function for button press
 void button_press()
 {
-    button_flags.set(KEY_FLAG);
+    flags.set(KEY_FLAG);
 }
 // Gyrscope data ready ISR
 void onGyroDataReady()
 {
-    button_flags.set(DATA_READY_FLAG);
+    flags.set(DATA_READY_FLAG);
+}
+// Callback function for touch screen
+void touch_screen()
+{
+    flags.set(UNLOCK_FLAG);
 }
 
 /*******************************************************************************
@@ -151,35 +158,102 @@ void gyroscope_thread()
     // the pin level rising before we have configured our interrupt handler.
     // To account for this, we manually check the signal and set the flag
     // for the first sample.
-    if (!(button_flags.get() & DATA_READY_FLAG) && (gyro_int2.read() == 1))
+    if (!(flags.get() & DATA_READY_FLAG) && (gyro_int2.read() == 1))
     {
-        button_flags.set(DATA_READY_FLAG);
+        flags.set(DATA_READY_FLAG);
     }
 
     while (1)
     {
-        button_flags.wait_all(KEY_FLAG);
+        vector<array<float, 3>> temp_key;
+
+        auto flag_check = flags.wait_any(KEY_FLAG | UNLOCK_FLAG | ERASE_FLAG);
+
+        if (flag_check & ERASE_FLAG)
+        {
+            printf("========[Erasing....]========\r\n");
+            gesture_key.clear();
+            printf("========[Key Erasing finish.]========\r\n");
+            unlocking_record.clear();
+            printf("========[All Erasing finish.]========\r\n");
+            flags.clear(ERASE_FLAG);
+        }
+
         // Initiate gyroscope
         InitiateGyroscope(&init_parameters, &raw_data);
 
         printf("========[Recording initializing...]========\r\n");
-
         timer.start();
         while (timer.elapsed_time() < 5s)
         {
             // Wait for the gyroscope data to be ready
-            button_flags.wait_all(DATA_READY_FLAG);
+            flags.wait_all(DATA_READY_FLAG);
             // Read the data from the gyroscope
             GetCalibratedRawData();
             // Add the converted data to the gesture_key vector
-            gesture_key.push_back({ConvertToDPS(raw_data.x_raw), ConvertToDPS(raw_data.y_raw), ConvertToDPS(raw_data.z_raw)});
+            temp_key.push_back({ConvertToDPS(raw_data.x_raw), ConvertToDPS(raw_data.y_raw), ConvertToDPS(raw_data.z_raw)});
             ThisThread::sleep_for(100ms); // 10Hz
         }
-
         timer.stop();  // Stop timer
         timer.reset(); // Reset timer
-
         printf("========[Recording finish.]========\r\n");
+
+        // TODO: add some data filtering there
+
+        // check the flag see if it is recording or unlocking
+        if (flag_check & KEY_FLAG)
+        {
+            if (temp_key.empty())
+            {
+                printf("========[No key in the system, Saving key...]========\r\n");
+                gesture_key = temp_key;
+                return;
+            } else {
+                printf("========[The old key will be removed!!!!!]========\r\n");
+                ThisThread::sleep_for(1s);
+                // TODO: Better to have a interrupt here to ask the user if they want to remove the old key
+                gesture_key.clear();
+                gesture_key = temp_key;
+                printf("========[Old key has been removed, new key is saved. ]========\r\n");
+                return; 
+            }
+            // TODO: potential imrovement, save the gesture key to flash
+            // storeGyroDataToFlash(temp_key, 0x080E0000);
+            // printf("========[Key saving finish.]========\r\n");
+            // gesture_key = readGyroDataFromFlash(0x080E0000, temp_key.size());
+        }
+        else if (flag_check & UNLOCK_FLAG)
+        {
+            printf("========[Unlocking...]========\r\n");
+            unlocking_record = temp_key;
+            temp_key.clear();
+
+            // check if the gesture key is empty
+            if (gesture_key.empty())
+            {
+                printf("========[No key saved.]========\r\n");
+                return; 
+            } else {
+                // compare the gesture key and the unlocking record
+                bool is_unlocked = true;
+                for (size_t i = 0; i < gesture_key.size(); i++)
+                {
+                    if (gesture_key[i][0] != unlocking_record[i][0] || gesture_key[i][1] != unlocking_record[i][1] || gesture_key[i][2] != unlocking_record[i][2])
+                    {
+                        is_unlocked = false;
+                        unlocking_record.clear();
+                        printf("========[Unlocking failed.]========\r\n");
+                        return;
+                    }
+                }
+                if (is_unlocked)
+                {
+                    printf("========[Unlocking success.]========\r\n");
+                    unlocking_record.clear();
+                    return; 
+                }
+            }
+        }
 
         ThisThread::sleep_for(1s);
 
@@ -191,8 +265,6 @@ void gyroscope_thread()
             printf("x: %f, y: %f, z: %f\r\n", gesture_key[i][0], gesture_key[i][1], gesture_key[i][2]);
         }
         printf("========[Printing finish.]========\r\n");
-
-        gesture_key.clear(); // Clear the vector
 
         ThisThread::sleep_for(100ms);
     }
@@ -314,7 +386,7 @@ vector<array<float, 3>> readGyroDataFromFlash(uint32_t flash_address, size_t dat
 //     case BUTTON_STATE_PRESSED:
 //         if (timer.elapsed_time().count() >= LONG_PRESS_TIMEOUT)
 //         {
-//             button_flags.set(ERASE_FLAG);
+//             flags.set(ERASE_FLAG);
 //             press_count = 0;
 //             timer.stop();
 //             timer.reset();
@@ -331,7 +403,7 @@ vector<array<float, 3>> readGyroDataFromFlash(uint32_t flash_address, size_t dat
 //         {
 //             if (press_count == 2)
 //             {
-//                 button_flags.set(KEY_FLAG);
+//                 flags.set(KEY_FLAG);
 //                 press_count = 0;
 //                 timer.stop();
 //                 timer.reset();
@@ -339,7 +411,7 @@ vector<array<float, 3>> readGyroDataFromFlash(uint32_t flash_address, size_t dat
 //             else if (press_count == 1)
 //             {
 //                 ThisThread::sleep_for(SINGLE_CLICK_TIMEOUT);
-//                 button_flags.set(UNLOCK_FLAG);
+//                 flags.set(UNLOCK_FLAG);
 //                 press_count = 0;
 //                 timer.stop();
 //                 timer.reset();
