@@ -17,6 +17,9 @@
 InterruptIn gyro_int2(PA_2, PullDown);
 InterruptIn user_button(USER_BUTTON, PullDown);
 
+DigitalOut green_led(LED1);
+DigitalOut red_led(LED2);
+
 LCD_DISCO_F429ZI lcd;
 TS_DISCO_F429ZI ts;
 
@@ -95,6 +98,17 @@ int main()
     user_button.rise(&button_press);
     gyro_int2.rise(&onGyroDataReady);
 
+    //initialize LEDs
+    if (gesture_key.empty())
+    {
+        red_led = 0;
+        green_led = 1;
+    }
+    else {
+        red_led = 1;
+        green_led = 0;
+    }
+
     ThisThread::sleep_for(100ms);
 
     // Create the gyroscope thread
@@ -109,7 +123,7 @@ int main()
     // keep main thread alive
     while (1)
     {
-        ThisThread::sleep_for(100ms);
+        ThisThread::sleep_for(500ms);
     }
 }
 
@@ -153,13 +167,14 @@ void gyroscope_thread()
             printf("========[Key Erasing finish.]========\r\n");
             unlocking_record.clear();
             printf("========[All Erasing finish.]========\r\n");
+            green_led = 1; red_led = 0;
         }
 
         if (flag_check & (KEY_FLAG | UNLOCK_FLAG))
         {
             // Initiate gyroscope
             InitiateGyroscope(&init_parameters, &raw_data);
-
+            // start recording gesture
             printf("========[Recording initializing...]========\r\n");
             timer.start();
             while (timer.elapsed_time() < 5s)
@@ -182,12 +197,12 @@ void gyroscope_thread()
         // check the flag see if it is recording or unlocking
         if (flag_check & KEY_FLAG)
         {
-
             if (gesture_key.empty())
             {
                 printf("========[No key in the system, Saving key...]========\r\n");
                 gesture_key = temp_key;
                 temp_key.clear();
+                red_led = 1; green_led = 0;
             }
             else
             {
@@ -198,6 +213,7 @@ void gyroscope_thread()
                 gesture_key = temp_key;
                 printf("========[Old key has been removed, new key is saved. ]========\r\n");
                 temp_key.clear();
+                red_led = 1; green_led = 0;
             }
 
             // Print the data
@@ -227,6 +243,7 @@ void gyroscope_thread()
             {
                 printf("========[No key saved. Please record it! ]========\r\n");
                 unlocking_record.clear();
+                green_led = 1; red_led = 0;
             }
             else
             {
@@ -238,11 +255,13 @@ void gyroscope_thread()
                 {
                     printf("========[Unlocking failed.]========\r\n");
                     unlocking_record.clear();
+                    green_led = 0; red_led = 1;
                 }
                 else
                 {
                     printf("========[Unlocking success.]========\r\n");
                     unlocking_record.clear();
+                    green_led = 1; red_led = 0;
                 }
             }
         }

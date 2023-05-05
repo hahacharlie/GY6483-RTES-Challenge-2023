@@ -29,8 +29,6 @@ SOFTWARE.
 SPI gyroscope(PF_9, PF_8, PF_7); // mosi, miso, sclk
 DigitalOut cs(PC_1);
 
-DigitalOut led(LED3); // indicate initialization
-
 int16_t x_threshold; // X-axis calibration threshold
 int16_t y_threshold; // Y-axis calibration threshold
 int16_t z_threshold; // Z-axis calibration threshold
@@ -95,7 +93,6 @@ void CalibrateGyroscope(Gyroscope_RawData *rawdata)
 void InitiateGyroscope(Gyroscope_Init_Parameters *init_parameters, Gyroscope_RawData *init_raw_data)
 {
   printf("\r\n========[Initializing gyroscope...]========\r\n");
-  led = !led;
   gyro_raw = init_raw_data;
   cs = 1;
   // set up gyroscope
@@ -126,7 +123,6 @@ void InitiateGyroscope(Gyroscope_Init_Parameters *init_parameters, Gyroscope_Raw
   }
 
   CalibrateGyroscope(gyro_raw); // calibrate the gyroscope and find the threshold for x, y, and z.
-  led = !led;
   printf("========[Initiation finish.]========\r\n");
 }
 
