@@ -6,9 +6,11 @@
 
 // Event flags
 #define KEY_FLAG 1
-#define DATA_READY_FLAG 2
-#define UNLOCK_FLAG 3
+#define UNLOCK_FLAG 2
 #define ERASE_FLAG 4
+
+#define DATA_READY_FLAG 8
+
 // Timeout values in milliseconds for button events
 #define SINGLE_CLICK_TIMEOUT 200
 #define DOUBLE_CLICK_TIMEOUT 500
@@ -21,8 +23,6 @@ InterruptIn user_button(USER_BUTTON, PullDown);
 
 LCD_DISCO_F429ZI lcd;
 TS_DISCO_F429ZI ts;
-
-InterruptIn touch_int(PA_15);
 
 EventFlags flags;
 
@@ -71,17 +71,12 @@ float movingAverageFilter(float input, float buffer[], size_t N, size_t &index, 
 // Callback function for button press
 void button_press()
 {
-    flags.set(KEY_FLAG);
+    flags.set(ERASE_FLAG);
 }
 // Gyrscope data ready ISR
 void onGyroDataReady()
 {
     flags.set(DATA_READY_FLAG);
-}
-// Callback function for touch screen
-void touch_screen()
-{
-    flags.set(UNLOCK_FLAG);
 }
 
 /*******************************************************************************
@@ -140,7 +135,6 @@ int main()
  * @brief gyroscope gesture key saving thread
  *
  * ****************************************************************************/
-// Function definition for the gyroscope thread task
 void gyroscope_thread()
 {
     // Add your gyroscope initialization parameters here
@@ -176,7 +170,6 @@ void gyroscope_thread()
             printf("========[Key Erasing finish.]========\r\n");
             unlocking_record.clear();
             printf("========[All Erasing finish.]========\r\n");
-            flags.clear(ERASE_FLAG);
         }
 
         // Initiate gyroscope
@@ -203,19 +196,20 @@ void gyroscope_thread()
         // check the flag see if it is recording or unlocking
         if (flag_check & KEY_FLAG)
         {
-            if (temp_key.empty())
+
+            if (gesture_key.empty())
             {
                 printf("========[No key in the system, Saving key...]========\r\n");
                 gesture_key = temp_key;
-                return;
-            } else {
+            }
+            else
+            {
                 printf("========[The old key will be removed!!!!!]========\r\n");
                 ThisThread::sleep_for(1s);
                 // TODO: Better to have a interrupt here to ask the user if they want to remove the old key
                 gesture_key.clear();
                 gesture_key = temp_key;
                 printf("========[Old key has been removed, new key is saved. ]========\r\n");
-                return; 
             }
             // TODO: potential imrovement, save the gesture key to flash
             // storeGyroDataToFlash(temp_key, 0x080E0000);
@@ -224,6 +218,7 @@ void gyroscope_thread()
         }
         else if (flag_check & UNLOCK_FLAG)
         {
+            flags.clear(UNLOCK_FLAG);
             printf("========[Unlocking...]========\r\n");
             unlocking_record = temp_key;
             temp_key.clear();
@@ -231,9 +226,10 @@ void gyroscope_thread()
             // check if the gesture key is empty
             if (gesture_key.empty())
             {
-                printf("========[No key saved.]========\r\n");
-                return; 
-            } else {
+                printf("========[No key saved. Please record it! ]========\r\n");
+            }
+            else
+            {
                 // compare the gesture key and the unlocking record
                 bool is_unlocked = true;
                 for (size_t i = 0; i < gesture_key.size(); i++)
@@ -243,14 +239,13 @@ void gyroscope_thread()
                         is_unlocked = false;
                         unlocking_record.clear();
                         printf("========[Unlocking failed.]========\r\n");
-                        return;
+                        break;
                     }
                 }
                 if (is_unlocked)
                 {
                     printf("========[Unlocking success.]========\r\n");
                     unlocking_record.clear();
-                    return; 
                 }
             }
         }
@@ -298,12 +293,16 @@ void touch_screen_thread()
             if (is_touch_inside_button(touch_x, touch_y, button2_x, button2_y - 30, button1_width, button1_height))
             {
                 printf("========[Recording....]========\r\n");
+                ThisThread::sleep_for(3s);
+                flags.set(KEY_FLAG);
             }
 
             // Check if the touch is inside button 2
             if (is_touch_inside_button(touch_x, touch_y, button1_x - 30, button1_y - 30, button2_width, button2_height))
             {
                 printf("========[Unlocking....]========\r\n");
+                ThisThread::sleep_for(3s);
+                flags.set(UNLOCK_FLAG);
             }
         }
         ThisThread::sleep_for(10ms);
@@ -422,16 +421,16 @@ vector<array<float, 3>> readGyroDataFromFlash(uint32_t flash_address, size_t dat
 //     }
 // }
 
-// /*******************************************************************************
-//  *
-//  * @brief draw button
-//  * @param x: x coordinate of the button
-//  * @param y: y coordinate of the button
-//  * @param width: width of the button
-//  * @param height: height of the button
-//  * @param label: label of the button
-//  *
-//  * ****************************************************************************/
+/*******************************************************************************
+ *
+ * @brief draw button
+ * @param x: x coordinate of the button
+ * @param y: y coordinate of the button
+ * @param width: width of the button
+ * @param height: height of the button
+ * @param label: label of the button
+ *
+ * ****************************************************************************/
 void draw_button(int x, int y, int width, int height, const char *label)
 {
     lcd.SetTextColor(LCD_COLOR_BLUE);
@@ -440,17 +439,17 @@ void draw_button(int x, int y, int width, int height, const char *label)
     lcd.DisplayStringAt(x + width / 2 - strlen(label) * 19, y + height / 2 - 8, (uint8_t *)label, CENTER_MODE);
 }
 
-// /*******************************************************************************
-//  *
-//  * @brief Check if the touch point is inside the button
-//  * @param touch_x: x coordinate of the touch point
-//  * @param touch_y: y coordinate of the touch point
-//  * @param button_x: x coordinate of the button
-//  * @param button_y: y coordinate of the button
-//  * @param button_width: width of the button
-//  * @param button_height: height of the button
-//  *
-//  * ****************************************************************************/
+/*******************************************************************************
+ *
+ * @brief Check if the touch point is inside the button
+ * @param touch_x: x coordinate of the touch point
+ * @param touch_y: y coordinate of the touch point
+ * @param button_x: x coordinate of the button
+ * @param button_y: y coordinate of the button
+ * @param button_width: width of the button
+ * @param button_height: height of the button
+ *
+ * ****************************************************************************/
 bool is_touch_inside_button(int touch_x, int touch_y, int button_x, int button_y, int button_width, int button_height)
 {
     return (touch_x >= button_x && touch_x <= button_x + button_width &&
