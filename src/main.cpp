@@ -1,5 +1,8 @@
 #include <mbed.h>
 #include <vector>
+#include <array>
+#include <limits>
+#include <cmath>
 #include "gyro.h"
 #include "drivers/LCD_DISCO_F429ZI.h"
 #include "drivers/TS_DISCO_F429ZI.h"
@@ -10,13 +13,6 @@
 #define ERASE_FLAG 4
 
 #define DATA_READY_FLAG 8
-
-// Timeout values in milliseconds for button events
-#define SINGLE_CLICK_TIMEOUT 200
-#define DOUBLE_CLICK_TIMEOUT 500
-#define LONG_PRESS_TIMEOUT 1000
-// Debounce timeout in milliseconds
-#define DEBOUNCE_TIMEOUT 20
 
 InterruptIn gyro_int2(PA_2, PullDown);
 InterruptIn user_button(USER_BUTTON, PullDown);
@@ -30,22 +26,8 @@ Timer timer;
 
 void draw_button(int x, int y, int width, int height, const char *label);
 bool is_touch_inside_button(int touch_x, int touch_y, int button_x, int button_y, int button_width, int button_height);
-
-// /*******************************************************************************
-//  *
-//  * @brief Button state machine states
-//  *
-//  * ****************************************************************************/
-// typedef enum
-// {
-//     BUTTON_STATE_IDLE,
-//     BUTTON_STATE_WAIT_DEBOUNCE,
-//     BUTTON_STATE_PRESSED,
-//     BUTTON_STATE_WAIT_RELEASE
-// } button_state_t;
-
-// Button state variable
-// volatile button_state_t button_state = BUTTON_STATE_IDLE;
+float euclidean_distance(const std::array<float, 3> &a, const std::array<float, 3> &b);
+float dtw(const std::vector<std::array<float, 3>> &s, const std::vector<std::array<float, 3>> &t);
 
 /*******************************************************************************
  * Function Prototypes of Threads
@@ -124,6 +106,7 @@ int main()
     touch_thread.start(callback(touch_screen_thread));
     printf("Touch screen thread started\r\n");
 
+    // keep main thread alive
     while (1)
     {
         ThisThread::sleep_for(100ms);
@@ -172,24 +155,27 @@ void gyroscope_thread()
             printf("========[All Erasing finish.]========\r\n");
         }
 
-        // Initiate gyroscope
-        InitiateGyroscope(&init_parameters, &raw_data);
-
-        printf("========[Recording initializing...]========\r\n");
-        timer.start();
-        while (timer.elapsed_time() < 5s)
+        if (flag_check & (KEY_FLAG | UNLOCK_FLAG))
         {
-            // Wait for the gyroscope data to be ready
-            flags.wait_all(DATA_READY_FLAG);
-            // Read the data from the gyroscope
-            GetCalibratedRawData();
-            // Add the converted data to the gesture_key vector
-            temp_key.push_back({ConvertToDPS(raw_data.x_raw), ConvertToDPS(raw_data.y_raw), ConvertToDPS(raw_data.z_raw)});
-            ThisThread::sleep_for(100ms); // 10Hz
+            // Initiate gyroscope
+            InitiateGyroscope(&init_parameters, &raw_data);
+
+            printf("========[Recording initializing...]========\r\n");
+            timer.start();
+            while (timer.elapsed_time() < 5s)
+            {
+                // Wait for the gyroscope data to be ready
+                flags.wait_all(DATA_READY_FLAG);
+                // Read the data from the gyroscope
+                GetCalibratedRawData();
+                // Add the converted data to the gesture_key vector
+                temp_key.push_back({ConvertToDPS(raw_data.x_raw), ConvertToDPS(raw_data.y_raw), ConvertToDPS(raw_data.z_raw)});
+                ThisThread::sleep_for(100ms); // 10Hz
+            }
+            timer.stop();  // Stop timer
+            timer.reset(); // Reset timer
+            printf("========[Recording finish.]========\r\n");
         }
-        timer.stop();  // Stop timer
-        timer.reset(); // Reset timer
-        printf("========[Recording finish.]========\r\n");
 
         // TODO: add some data filtering there
 
@@ -201,6 +187,7 @@ void gyroscope_thread()
             {
                 printf("========[No key in the system, Saving key...]========\r\n");
                 gesture_key = temp_key;
+                temp_key.clear();
             }
             else
             {
@@ -210,7 +197,19 @@ void gyroscope_thread()
                 gesture_key.clear();
                 gesture_key = temp_key;
                 printf("========[Old key has been removed, new key is saved. ]========\r\n");
+                temp_key.clear();
             }
+
+            // Print the data
+            ThisThread::sleep_for(1s);
+            printf("========[Printing data in guesture key...]========\r\n");
+            printf("There are %d data in the vector.\r\n", gesture_key.size());
+            for (size_t i = 0; i < gesture_key.size(); i++)
+            {
+                printf("x: %f, y: %f, z: %f\r\n", gesture_key[i][0], gesture_key[i][1], gesture_key[i][2]);
+            }
+            printf("========[Printing finish.]========\r\n");
+
             // TODO: potential imrovement, save the gesture key to flash
             // storeGyroDataToFlash(temp_key, 0x080E0000);
             // printf("========[Key saving finish.]========\r\n");
@@ -227,39 +226,26 @@ void gyroscope_thread()
             if (gesture_key.empty())
             {
                 printf("========[No key saved. Please record it! ]========\r\n");
+                unlocking_record.clear();
             }
             else
             {
-                // compare the gesture key and the unlocking record
-                bool is_unlocked = true;
-                for (size_t i = 0; i < gesture_key.size(); i++)
+                // calculate the similarity of the gesture key and the unlocking record
+                float similarity = dtw(gesture_key, unlocking_record);
+                printf("========[Similarity: %f]========\r\n", similarity);
+                ThisThread::sleep_for(1s);
+                if (similarity > 100)
                 {
-                    if (gesture_key[i][0] != unlocking_record[i][0] || gesture_key[i][1] != unlocking_record[i][1] || gesture_key[i][2] != unlocking_record[i][2])
-                    {
-                        is_unlocked = false;
-                        unlocking_record.clear();
-                        printf("========[Unlocking failed.]========\r\n");
-                        break;
-                    }
+                    printf("========[Unlocking failed.]========\r\n");
+                    unlocking_record.clear();
                 }
-                if (is_unlocked)
+                else
                 {
                     printf("========[Unlocking success.]========\r\n");
                     unlocking_record.clear();
                 }
             }
         }
-
-        ThisThread::sleep_for(1s);
-
-        // Print the data
-        printf("========[Printing data from guesture key...]========\r\n");
-        printf("There are %d data in the vector.\r\n", gesture_key.size());
-        for (size_t i = 0; i < gesture_key.size(); i++)
-        {
-            printf("x: %f, y: %f, z: %f\r\n", gesture_key[i][0], gesture_key[i][1], gesture_key[i][2]);
-        }
-        printf("========[Printing finish.]========\r\n");
 
         ThisThread::sleep_for(100ms);
     }
@@ -292,7 +278,7 @@ void touch_screen_thread()
             // Check if the touch is inside button 1
             if (is_touch_inside_button(touch_x, touch_y, button2_x, button2_y - 30, button1_width, button1_height))
             {
-                printf("========[Recording....]========\r\n");
+                printf("========[Recording after 3 seconds....]========\r\n");
                 ThisThread::sleep_for(3s);
                 flags.set(KEY_FLAG);
             }
@@ -300,7 +286,7 @@ void touch_screen_thread()
             // Check if the touch is inside button 2
             if (is_touch_inside_button(touch_x, touch_y, button1_x - 30, button1_y - 30, button2_width, button2_height))
             {
-                printf("========[Unlocking....]========\r\n");
+                printf("========[Unlock Recording after 3 seconds....]========\r\n");
                 ThisThread::sleep_for(3s);
                 flags.set(UNLOCK_FLAG);
             }
@@ -359,68 +345,6 @@ vector<array<float, 3>> readGyroDataFromFlash(uint32_t flash_address, size_t dat
     return gesture_key;
 }
 
-// /*******************************************************************************
-//  *
-//  * @brief button press ISR
-//  *
-//  * ****************************************************************************/
-// void button_press()
-// {
-//     static Timer timer;
-//     static unsigned int press_count = 0;
-
-//     switch (button_state)
-//     {
-//     case BUTTON_STATE_IDLE:
-//         button_state = BUTTON_STATE_WAIT_DEBOUNCE;
-//         timer.start();
-//         break;
-//     case BUTTON_STATE_WAIT_DEBOUNCE:
-//         if (timer.elapsed_time().count() >= DEBOUNCE_TIMEOUT)
-//         {
-//             button_state = BUTTON_STATE_PRESSED;
-//             timer.reset();
-//         }
-//         break;
-//     case BUTTON_STATE_PRESSED:
-//         if (timer.elapsed_time().count() >= LONG_PRESS_TIMEOUT)
-//         {
-//             flags.set(ERASE_FLAG);
-//             press_count = 0;
-//             timer.stop();
-//             timer.reset();
-//             button_state = BUTTON_STATE_WAIT_RELEASE;
-//         }
-//         else if (user_button)
-//         {
-//             press_count++;
-//             button_state = BUTTON_STATE_WAIT_RELEASE;
-//         }
-//         break;
-//     case BUTTON_STATE_WAIT_RELEASE:
-//         if (user_button)
-//         {
-//             if (press_count == 2)
-//             {
-//                 flags.set(KEY_FLAG);
-//                 press_count = 0;
-//                 timer.stop();
-//                 timer.reset();
-//             }
-//             else if (press_count == 1)
-//             {
-//                 ThisThread::sleep_for(SINGLE_CLICK_TIMEOUT);
-//                 flags.set(UNLOCK_FLAG);
-//                 press_count = 0;
-//                 timer.stop();
-//                 timer.reset();
-//             }
-//             button_state = BUTTON_STATE_IDLE;
-//         }
-//         break;
-//     }
-// }
-
 /*******************************************************************************
  *
  * @brief draw button
@@ -454,4 +378,48 @@ bool is_touch_inside_button(int touch_x, int touch_y, int button_x, int button_y
 {
     return (touch_x >= button_x && touch_x <= button_x + button_width &&
             touch_y >= button_y && touch_y <= button_y + button_height);
+}
+
+/*******************************************************************************
+ *
+ * @brief Calculate the euclidean distance between two vectors
+ * @param a: the first vector
+ * @param b: the second vector
+ * @return the euclidean distance between the two vectors
+ *
+ * ****************************************************************************/
+float euclidean_distance(const std::array<float, 3> &a, const std::array<float, 3> &b)
+{
+    float sum = 0;
+    for (size_t i = 0; i < 3; ++i)
+    {
+        sum += (a[i] - b[i]) * (a[i] - b[i]);
+    }
+    return std::sqrt(sum);
+}
+
+/*******************************************************************************
+ *
+ * @brief Calculate the DTW distance between two vectors
+ * @param s: the first vector
+ * @param t: the second vector
+ * @return the DTW distance between the two vectors
+ *
+ * ****************************************************************************/
+float dtw(const std::vector<std::array<float, 3>> &s, const std::vector<std::array<float, 3>> &t)
+{
+    std::vector<std::vector<float>> dtw_matrix(s.size() + 1, std::vector<float>(t.size() + 1, std::numeric_limits<float>::infinity()));
+
+    dtw_matrix[0][0] = 0;
+
+    for (size_t i = 1; i <= s.size(); ++i)
+    {
+        for (size_t j = 1; j <= t.size(); ++j)
+        {
+            float cost = euclidean_distance(s[i - 1], t[j - 1]);
+            dtw_matrix[i][j] = cost + std::min({dtw_matrix[i - 1][j], dtw_matrix[i][j - 1], dtw_matrix[i - 1][j - 1]});
+        }
+    }
+
+    return dtw_matrix[s.size()][t.size()];
 }
