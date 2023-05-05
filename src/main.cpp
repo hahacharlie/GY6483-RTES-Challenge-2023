@@ -3,8 +3,6 @@
 #include "gyro.h"
 #include "drivers/LCD_DISCO_F429ZI.h"
 #include "drivers/TS_DISCO_F429ZI.h"
-// #include "button.h"
-// #include "drivers/LCD_DISCO_F429ZI.h"
 
 // Event flags
 #define KEY_FLAG 1
@@ -51,6 +49,7 @@ bool is_touch_inside_button(int touch_x, int touch_y, int button_x, int button_y
  * Function Prototypes of Threads
  * ****************************************************************************/
 void gyroscope_thread();
+void touch_screen_thread();
 
 /*******************************************************************************
  * Function Prototypes of Flash
@@ -62,14 +61,12 @@ vector<array<float, 3>> readGyroDataFromFlash(uint32_t flash_address, size_t dat
  * Function Prototypes of filters
  * ****************************************************************************/
 // moving average filter will be defined after main()
-// float movingAverageFilter(float input, float buffer[], size_t N, size_t &index, float &sum);
+float movingAverageFilter(float input, float buffer[], size_t N, size_t &index, float &sum);
 
 /*******************************************************************************
  * ISR Callback Functions
  * ****************************************************************************/
 // Callback function for button press
-// void button_press(); // defined after main()
-// Call back function for button press
 void button_press()
 {
     button_flags.set(KEY_FLAG);
@@ -81,11 +78,21 @@ void onGyroDataReady()
 }
 
 /*******************************************************************************
- * @brief Variables
+ * @brief Global Variables
  * ****************************************************************************/
 // Create a vector to store gyroscope data
 vector<array<float, 3>> gesture_key;
 vector<array<float, 3>> unlocking_record;
+const int button1_x = 60;
+const int button1_y = 80;
+const int button1_width = 120;
+const int button1_height = 50;
+const char *button1_label = "RECORD";
+const int button2_x = 60;
+const int button2_y = 200;
+const int button2_width = 120;
+const int button2_height = 50;
+const char *button2_label = "UNLOCK";
 
 /*******************************************************************************
  * @brief main function
@@ -95,64 +102,29 @@ int main()
     lcd.Clear(LCD_COLOR_BLACK);
 
     // Draw button 1
-    int button1_x = 60;
-    int button1_y = 80;
-    int button1_width = 120;
-    int button1_height = 50;
-    const char *button1_label = "RECORD";
     draw_button(button1_x, button1_y, button1_width, button1_height, button1_label);
 
     // Draw button 2
-    int button2_x = 60;
-    int button2_y = 200;
-    int button2_width = 120;
-    int button2_height = 50;
-    const char *button2_label = "UNLOCK";
     draw_button(button2_x, button2_y, button2_width, button2_height, button2_label);
-
-    // Touch screen initialization
-    if (ts.Init(lcd.GetXSize(), lcd.GetYSize())!= TS_OK)
-    {
-        printf("Failed to initialize the touch screen!\n");
-        return 1;
-    }
 
     // initialize all interrupts
     user_button.rise(&button_press);
     gyro_int2.rise(&onGyroDataReady);
 
-    ThisThread::sleep_for(1s);
-
-    TS_StateTypeDef ts_state;
+    ThisThread::sleep_for(100ms);
 
     // Create the gyroscope thread
     Thread key_saving;
     key_saving.start(callback(gyroscope_thread));
     printf("Gesture Key recording started\r\n");
+    // Create the touch screen thread
+    Thread touch_thread;
+    touch_thread.start(callback(touch_screen_thread));
+    printf("Touch screen thread started\r\n");
 
     while (1)
     {
-        ts.GetState(&ts_state);
-
-        if (ts_state.TouchDetected)
-        {
-            int touch_x = ts_state.X;
-            int touch_y = ts_state.Y;
-
-            // Check if the touch is inside button 1
-            if (is_touch_inside_button(touch_x, touch_y, button2_x, button2_y-30, button1_width, button1_height))
-            {
-                printf("Button 1 pressed!\n");
-            }
-
-            // Check if the touch is inside button 2
-            if (is_touch_inside_button(touch_x, touch_y, button1_x-30, button1_y-30, button2_width, button2_height))
-            {
-                printf("Button 2 pressed!\n");
-            }
-        }
-
-        ThisThread::sleep_for(10ms);
+        ThisThread::sleep_for(100ms);
     }
 }
 
@@ -219,9 +191,50 @@ void gyroscope_thread()
             printf("x: %f, y: %f, z: %f\r\n", gesture_key[i][0], gesture_key[i][1], gesture_key[i][2]);
         }
         printf("========[Printing finish.]========\r\n");
+
         gesture_key.clear(); // Clear the vector
 
         ThisThread::sleep_for(100ms);
+    }
+}
+
+/*******************************************************************************
+ *
+ * @brief touch screen thread
+ *
+ * ****************************************************************************/
+void touch_screen_thread()
+{
+    // Add your touch screen initialization and handling code here
+    TS_StateTypeDef ts_state;
+
+    if (ts.Init(lcd.GetXSize(), lcd.GetYSize()) != TS_OK)
+    {
+        printf("Failed to initialize the touch screen!\r\n");
+        return;
+    }
+
+    while (1)
+    {
+        ts.GetState(&ts_state);
+        if (ts_state.TouchDetected)
+        {
+            int touch_x = ts_state.X;
+            int touch_y = ts_state.Y;
+
+            // Check if the touch is inside button 1
+            if (is_touch_inside_button(touch_x, touch_y, button2_x, button2_y - 30, button1_width, button1_height))
+            {
+                printf("========[Recording....]========\r\n");
+            }
+
+            // Check if the touch is inside button 2
+            if (is_touch_inside_button(touch_x, touch_y, button1_x - 30, button1_y - 30, button2_width, button2_height))
+            {
+                printf("========[Unlocking....]========\r\n");
+            }
+        }
+        ThisThread::sleep_for(10ms);
     }
 }
 
