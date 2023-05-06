@@ -14,6 +14,8 @@
 
 #define DATA_READY_FLAG 8
 
+#define FONT_SIZE 16
+
 InterruptIn gyro_int2(PA_2, PullDown);
 InterruptIn user_button(USER_BUTTON, PullDown);
 
@@ -48,7 +50,7 @@ vector<array<float, 3>> readGyroDataFromFlash(uint32_t flash_address, size_t dat
  * Function Prototypes of filters
  * ****************************************************************************/
 // moving average filter will be defined after main()
-float movingAverageFilter(float input, float buffer[], size_t N, size_t &index, float &sum);
+float movingAverageFilter(float input, float display_buffer[], size_t N, size_t &index, float &sum);
 
 /*******************************************************************************
  * ISR Callback Functions
@@ -76,10 +78,17 @@ const int button1_width = 120;
 const int button1_height = 50;
 const char *button1_label = "RECORD";
 const int button2_x = 60;
-const int button2_y = 200;
+const int button2_y = 180;
 const int button2_width = 120;
 const int button2_height = 50;
 const char *button2_label = "UNLOCK";
+const int message_x = 5;
+const int message_y = 30;
+const char *message = "GESTURE UNLOCKER";
+const int text_x = 5;
+const int text_y = 270;
+const char *text_0 = "NO KEY RECORDED";
+const char *text_1 = "LOCKED";
 
 /*******************************************************************************
  * @brief main function
@@ -94,36 +103,40 @@ int main()
     // Draw button 2
     draw_button(button2_x, button2_y, button2_width, button2_height, button2_label);
 
+    // Display the welcome message
+    lcd.DisplayStringAt(message_x, message_y, (uint8_t *)message, CENTER_MODE);
+
     // initialize all interrupts
     user_button.rise(&button_press);
     gyro_int2.rise(&onGyroDataReady);
 
-    //initialize LEDs
+    // initialize LEDs
     if (gesture_key.empty())
     {
         red_led = 0;
         green_led = 1;
+        lcd.DisplayStringAt(text_x, text_y, (uint8_t *)text_0, CENTER_MODE);
     }
-    else {
+    else
+    {
         red_led = 1;
         green_led = 0;
+        lcd.DisplayStringAt(text_x, text_y, (uint8_t *)text_1, CENTER_MODE);
     }
-
-    ThisThread::sleep_for(100ms);
 
     // Create the gyroscope thread
     Thread key_saving;
     key_saving.start(callback(gyroscope_thread));
-    printf("Gesture Key recording started\r\n");
+    // printf("Gesture Key recording started\r\n");
     // Create the touch screen thread
     Thread touch_thread;
     touch_thread.start(callback(touch_screen_thread));
-    printf("Touch screen thread started\r\n");
+    // printf("Touch screen thread started\r\n");
 
     // keep main thread alive
     while (1)
     {
-        ThisThread::sleep_for(500ms);
+        ThisThread::sleep_for(100ms);
     }
 }
 
@@ -142,6 +155,9 @@ void gyroscope_thread()
 
     // Set up gyroscope's raw data
     Gyroscope_RawData raw_data;
+
+    // initialize a string display_buffer that can be draw on the LCD to dispaly the status
+    char display_buffer[50];
 
     // The gyroscope sensor keeps its configuration between power cycles.
     // This means that the gyroscope will already have it's data-ready interrupt
@@ -162,20 +178,53 @@ void gyroscope_thread()
 
         if (flag_check & ERASE_FLAG)
         {
-            printf("========[Erasing....]========\r\n");
+            // printf("========[Erasing....]========\r\n");
+            sprintf(display_buffer, "Erasing....");
+            lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+            lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+            lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+            lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
             gesture_key.clear();
-            printf("========[Key Erasing finish.]========\r\n");
+            // printf("========[Key Erasing finish.]========\r\n");
+            sprintf(display_buffer, "Key Erasing finish.");
+            lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+            lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+            lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+            lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
             unlocking_record.clear();
-            printf("========[All Erasing finish.]========\r\n");
-            green_led = 1; red_led = 0;
+            // printf("========[All Erasing finish.]========\r\n");
+            sprintf(display_buffer, "All Erasing finish.");
+            lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+            lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+            lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+            lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+            green_led = 1;
+            red_led = 0;
         }
 
         if (flag_check & (KEY_FLAG | UNLOCK_FLAG))
         {
+            sprintf(display_buffer, "Hold On");
+            lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+            lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+            lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+            lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+            ThisThread::sleep_for(1s);
+            sprintf(display_buffer, "Calibrating...");
+            lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+            lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+            lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+            lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
             // Initiate gyroscope
             InitiateGyroscope(&init_parameters, &raw_data);
             // start recording gesture
-            printf("========[Recording initializing...]========\r\n");
+            // printf("========[Recording...]========\r\n");
+            sprintf(display_buffer, "Recording...");
+            lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+            lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+            lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+            lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+            ThisThread::sleep_for(1s);
             timer.start();
             while (timer.elapsed_time() < 5s)
             {
@@ -185,11 +234,16 @@ void gyroscope_thread()
                 GetCalibratedRawData();
                 // Add the converted data to the gesture_key vector
                 temp_key.push_back({ConvertToDPS(raw_data.x_raw), ConvertToDPS(raw_data.y_raw), ConvertToDPS(raw_data.z_raw)});
-                ThisThread::sleep_for(100ms); // 10Hz
+                ThisThread::sleep_for(50ms); // 20Hz
             }
             timer.stop();  // Stop timer
             timer.reset(); // Reset timer
-            printf("========[Recording finish.]========\r\n");
+            // printf("========[Recording finish.]========\r\n");
+            sprintf(display_buffer, "Finished...");
+            lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+            lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+            lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+            lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
         }
 
         // TODO: add some data filtering there
@@ -199,32 +253,54 @@ void gyroscope_thread()
         {
             if (gesture_key.empty())
             {
-                printf("========[No key in the system, Saving key...]========\r\n");
+                // printf("========[No key in the system, Saving key...]========\r\n");
+                sprintf(display_buffer, "Saving Key...");
+                lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
                 gesture_key = temp_key;
                 temp_key.clear();
-                red_led = 1; green_led = 0;
+                red_led = 1;
+                green_led = 0;
+                sprintf(display_buffer, "Key saved...");
+                lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
             }
             else
             {
-                printf("========[The old key will be removed!!!!!]========\r\n");
+                // printf("========[The old key will be removed!!!!!]========\r\n");
+                sprintf(display_buffer, "Removing old key...");
+                lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
                 ThisThread::sleep_for(1s);
                 // TODO: Better to have a interrupt here to ask the user if they want to remove the old key
                 gesture_key.clear();
                 gesture_key = temp_key;
-                printf("========[Old key has been removed, new key is saved. ]========\r\n");
+                // printf("========[Old key has been removed, new key is saved. ]========\r\n");
+                sprintf(display_buffer, "New key is saved.");
+                lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
                 temp_key.clear();
-                red_led = 1; green_led = 0;
+                red_led = 1;
+                green_led = 0;
             }
 
             // Print the data
-            ThisThread::sleep_for(1s);
-            printf("========[Printing data in guesture key...]========\r\n");
-            printf("There are %d data in the vector.\r\n", gesture_key.size());
-            for (size_t i = 0; i < gesture_key.size(); i++)
-            {
-                printf("x: %f, y: %f, z: %f\r\n", gesture_key[i][0], gesture_key[i][1], gesture_key[i][2]);
-            }
-            printf("========[Printing finish.]========\r\n");
+            // ThisThread::sleep_for(1s);
+            // printf("========[Printing data in guesture key...]========\r\n");
+            // printf("There are %d data in the vector.\r\n", gesture_key.size());
+            // for (size_t i = 0; i < gesture_key.size(); i++)
+            // {
+            //     printf("x: %f, y: %f, z: %f\r\n", gesture_key[i][0], gesture_key[i][1], gesture_key[i][2]);
+            // }
+            // printf("========[Printing finish.]========\r\n");
 
             // TODO: potential imrovement, save the gesture key to flash
             // storeGyroDataToFlash(temp_key, 0x080E0000);
@@ -234,38 +310,65 @@ void gyroscope_thread()
         else if (flag_check & UNLOCK_FLAG)
         {
             flags.clear(UNLOCK_FLAG);
-            printf("========[Unlocking...]========\r\n");
+            // printf("========[Unlocking...]========\r\n");
+            sprintf(display_buffer, "Unlocking...");
+            lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+            lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+            lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+            lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
             unlocking_record = temp_key;
             temp_key.clear();
 
             // check if the gesture key is empty
             if (gesture_key.empty())
             {
-                printf("========[No key saved. Please record it! ]========\r\n");
+                // printf("========[No key saved. Please record it! ]========\r\n");
+                sprintf(display_buffer, "NO KEY SAVED.");
+                lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
                 unlocking_record.clear();
-                green_led = 1; red_led = 0;
+                green_led = 1;
+                red_led = 0;
             }
             else
             {
                 // calculate the similarity of the gesture key and the unlocking record
                 float similarity = dtw(gesture_key, unlocking_record);
-                printf("========[Similarity: %f]========\r\n", similarity);
+                // printf("========[Similarity: %f]========\r\n", similarity);
+                sprintf(display_buffer, "Similarity: %f", similarity);
+                lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
                 ThisThread::sleep_for(1s);
-                if (similarity > 100)
+                if (similarity > 3000) // TODO: need to find a better threshold
                 {
-                    printf("========[Unlocking failed.]========\r\n");
+                    // printf("========[Unlocking failed.]========\r\n");
+                    sprintf(display_buffer, "UNLOCK: FAILED");
+                    lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                    lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                    lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                    lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
                     unlocking_record.clear();
-                    green_led = 0; red_led = 1;
+                    green_led = 0;
+                    red_led = 1;
                 }
                 else
                 {
-                    printf("========[Unlocking success.]========\r\n");
+                    // printf("========[Unlocking success.]========\r\n");
+                    sprintf(display_buffer, "UNLOCK: SUCCESS");
+                    lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                    lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                    lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                    lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
                     unlocking_record.clear();
-                    green_led = 1; red_led = 0;
+                    green_led = 1;
+                    red_led = 0;
                 }
             }
         }
-
         ThisThread::sleep_for(100ms);
     }
 }
@@ -286,6 +389,9 @@ void touch_screen_thread()
         return;
     }
 
+    // initialize a string display_buffer that can be draw on the LCD to dispaly the status
+    char display_buffer[50];
+
     while (1)
     {
         ts.GetState(&ts_state);
@@ -294,19 +400,29 @@ void touch_screen_thread()
             int touch_x = ts_state.X;
             int touch_y = ts_state.Y;
 
-            // Check if the touch is inside button 1
-            if (is_touch_inside_button(touch_x, touch_y, button2_x, button2_y - 30, button1_width, button1_height))
+            // Check if the touch is inside record button
+            if (is_touch_inside_button(touch_x, touch_y, button2_x, button2_y, button1_width, button1_height))
             {
-                printf("========[Recording after 3 seconds....]========\r\n");
-                ThisThread::sleep_for(3s);
+                // printf("========[Recording after 1 seconds....]========\r\n");
+                sprintf(display_buffer, "Recording in 1s...");
+                lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+                ThisThread::sleep_for(1s);
                 flags.set(KEY_FLAG);
             }
 
-            // Check if the touch is inside button 2
-            if (is_touch_inside_button(touch_x, touch_y, button1_x - 30, button1_y - 30, button2_width, button2_height))
+            // Check if the touch is inside unlock button
+            if (is_touch_inside_button(touch_x, touch_y, button1_x, button1_y, button2_width, button2_height))
             {
-                printf("========[Unlock Recording after 3 seconds....]========\r\n");
-                ThisThread::sleep_for(3s);
+                // printf("========[Unlock Recording after 1 seconds....]========\r\n");
+                sprintf(display_buffer, "Unlocking in 1s...");
+                lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+                ThisThread::sleep_for(1s);
                 flags.set(UNLOCK_FLAG);
             }
         }
@@ -378,7 +494,6 @@ void draw_button(int x, int y, int width, int height, const char *label)
 {
     lcd.SetTextColor(LCD_COLOR_BLUE);
     lcd.FillRect(x, y, width, height);
-    // lcd.SetTextColor(LCD_COLOR_WHITE);
     lcd.DisplayStringAt(x + width / 2 - strlen(label) * 19, y + height / 2 - 8, (uint8_t *)label, CENTER_MODE);
 }
 
