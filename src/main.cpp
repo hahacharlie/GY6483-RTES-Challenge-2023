@@ -535,7 +535,7 @@ float euclidean_distance(const std::array<float, 3> &a, const std::array<float, 
 /*******************************************************************************
  *
  * @brief Calculate the DTW distance between two vectors
- * @param s: the first vector
+ * @param s: the first vectorS
  * @param t: the second vector
  * @return the DTW distance between the two vectors
  *
