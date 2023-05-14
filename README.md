@@ -11,9 +11,9 @@
 ### How to Use:
 
 - Compile and upload code to the board.
-- At the beginning, two buttons "Record" and "Unlock" will show on the LCD screen.
+- Two buttons "Record" and "Unlock" will show on the LCD screen.
 - Click on the "Record" button.
-- Wait until "Recording..." is shown at the bottom of the screen.
+- Wait until "**Recording...**" is shown at the bottom of the screen.
 - Perform the gesture to input the key within **5** seconds.
 - Click on the "Unlock" button to unlock the device.
 - Perform the same gesture to unlock the device.
