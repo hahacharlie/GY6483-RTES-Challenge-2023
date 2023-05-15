@@ -3,6 +3,7 @@
 #include <array>
 #include <limits>
 #include <cmath>
+#include <math.h>
 #include "gyro.h"
 #include "drivers/LCD_DISCO_F429ZI.h"
 #include "drivers/TS_DISCO_F429ZI.h"
@@ -15,6 +16,9 @@
 #define DATA_READY_FLAG 8
 
 #define FONT_SIZE 16
+
+// the unlocking threshold
+#define CORRELATION_THRESHOLD 0.3f
 
 InterruptIn gyro_int2(PA_2, PullDown);
 InterruptIn user_button(USER_BUTTON, PullDown);
@@ -31,9 +35,11 @@ Timer timer;
 
 void draw_button(int x, int y, int width, int height, const char *label);
 bool is_touch_inside_button(int touch_x, int touch_y, int button_x, int button_y, int button_width, int button_height);
-float euclidean_distance(const std::array<float, 3> &a, const std::array<float, 3> &b);
-float dtw(const std::vector<std::array<float, 3>> &s, const std::vector<std::array<float, 3>> &t);
-
+float euclidean_distance(const array<float, 3> &a, const array<float, 3> &b);
+float dtw(const vector<array<float, 3>> &s, const vector<array<float, 3>> &t);
+void trim_gyro_data(vector<array<float, 3>> &data);
+float correlation(const vector<float> &a, const vector<float> &b);
+array<float, 3> calculateCorrelationVectors(vector<array<float, 3>>& vec1, vector<array<float, 3>>& vec2);
 /*******************************************************************************
  * Function Prototypes of Threads
  * ****************************************************************************/
@@ -89,6 +95,7 @@ const int text_x = 5;
 const int text_y = 270;
 const char *text_0 = "NO KEY RECORDED";
 const char *text_1 = "LOCKED";
+int err = 0;
 
 /*******************************************************************************
  * @brief main function
@@ -178,21 +185,18 @@ void gyroscope_thread()
 
         if (flag_check & ERASE_FLAG)
         {
-            // printf("========[Erasing....]========\r\n");
             sprintf(display_buffer, "Erasing....");
             lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
             lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
             lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
             lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
             gesture_key.clear();
-            // printf("========[Key Erasing finish.]========\r\n");
             sprintf(display_buffer, "Key Erasing finish.");
             lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
             lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
             lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
             lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
             unlocking_record.clear();
-            // printf("========[All Erasing finish.]========\r\n");
             sprintf(display_buffer, "All Erasing finish.");
             lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
             lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
@@ -218,13 +222,29 @@ void gyroscope_thread()
             // Initiate gyroscope
             InitiateGyroscope(&init_parameters, &raw_data);
             // start recording gesture
-            // printf("========[Recording...]========\r\n");
-            sprintf(display_buffer, "Recording...");
+            sprintf(display_buffer, "Recording in 3...");
             lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
             lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
             lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
             lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
             ThisThread::sleep_for(1s);
+            sprintf(display_buffer, "Recording in 2...");
+            lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+            lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+            lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+            lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+            ThisThread::sleep_for(1s);
+            sprintf(display_buffer, "Recording in 1...");
+            lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+            lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+            lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+            lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+            ThisThread::sleep_for(1s);
+            sprintf(display_buffer, "Recording...");
+            lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+            lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+            lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+            lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
             timer.start();
             while (timer.elapsed_time() < 5s)
             {
@@ -238,7 +258,10 @@ void gyroscope_thread()
             }
             timer.stop();  // Stop timer
             timer.reset(); // Reset timer
-            // printf("========[Recording finish.]========\r\n");
+
+            // trim zeros
+            trim_gyro_data(temp_key);
+
             sprintf(display_buffer, "Finished...");
             lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
             lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
@@ -246,23 +269,23 @@ void gyroscope_thread()
             lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
         }
 
-        // TODO: add some data filtering there
-
         // check the flag see if it is recording or unlocking
         if (flag_check & KEY_FLAG)
         {
             if (gesture_key.empty())
             {
-                // printf("========[No key in the system, Saving key...]========\r\n");
                 sprintf(display_buffer, "Saving Key...");
                 lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
                 lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
                 lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
                 lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+
                 gesture_key = temp_key;
+
                 temp_key.clear();
                 red_led = 1;
                 green_led = 0;
+
                 sprintf(display_buffer, "Key saved...");
                 lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
                 lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
@@ -271,17 +294,14 @@ void gyroscope_thread()
             }
             else
             {
-                // printf("========[The old key will be removed!!!!!]========\r\n");
                 sprintf(display_buffer, "Removing old key...");
                 lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
                 lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
                 lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
                 lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
                 ThisThread::sleep_for(1s);
-                // TODO: Better to have a interrupt here to ask the user if they want to remove the old key
                 gesture_key.clear();
                 gesture_key = temp_key;
-                // printf("========[Old key has been removed, new key is saved. ]========\r\n");
                 sprintf(display_buffer, "New key is saved.");
                 lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
                 lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
@@ -291,26 +311,10 @@ void gyroscope_thread()
                 red_led = 1;
                 green_led = 0;
             }
-
-            // Print the data
-            // ThisThread::sleep_for(1s);
-            // printf("========[Printing data in guesture key...]========\r\n");
-            // printf("There are %d data in the vector.\r\n", gesture_key.size());
-            // for (size_t i = 0; i < gesture_key.size(); i++)
-            // {
-            //     printf("x: %f, y: %f, z: %f\r\n", gesture_key[i][0], gesture_key[i][1], gesture_key[i][2]);
-            // }
-            // printf("========[Printing finish.]========\r\n");
-
-            // TODO: potential imrovement, save the gesture key to flash
-            // storeGyroDataToFlash(temp_key, 0x080E0000);
-            // printf("========[Key saving finish.]========\r\n");
-            // gesture_key = readGyroDataFromFlash(0x080E0000, temp_key.size());
         }
         else if (flag_check & UNLOCK_FLAG)
         {
             flags.clear(UNLOCK_FLAG);
-            // printf("========[Unlocking...]========\r\n");
             sprintf(display_buffer, "Unlocking...");
             lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
             lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
@@ -322,7 +326,6 @@ void gyroscope_thread()
             // check if the gesture key is empty
             if (gesture_key.empty())
             {
-                // printf("========[No key saved. Please record it! ]========\r\n");
                 sprintf(display_buffer, "NO KEY SAVED.");
                 lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
                 lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
@@ -335,37 +338,76 @@ void gyroscope_thread()
             else
             {
                 // calculate the similarity of the gesture key and the unlocking record
-                float similarity = dtw(gesture_key, unlocking_record);
-                // printf("========[Similarity: %f]========\r\n", similarity);
-                sprintf(display_buffer, "Similarity: %f", similarity);
-                lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
-                lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
-                lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
-                lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
-                ThisThread::sleep_for(1s);
-                if (similarity > 3000) // TODO: need to find a better threshold
+                int unlock = 0;
+
+                array<float, 3> correlationResult = calculateCorrelationVectors(gesture_key, unlocking_record);
+
+                if (err != 0)
                 {
-                    // printf("========[Unlocking failed.]========\r\n");
-                    sprintf(display_buffer, "UNLOCK: FAILED");
-                    lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
-                    lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
-                    lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
-                    lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
-                    unlocking_record.clear();
-                    green_led = 0;
-                    red_led = 1;
+                    printf("Error calculating correlation: vectors have different sizes\n");
                 }
                 else
                 {
-                    // printf("========[Unlocking success.]========\r\n");
+                    printf("Correlation values: x = %f, y = %f, z = %f\n", correlationResult[0], correlationResult[1], correlationResult[2]);
+                    // iterate through correlationResult to check if any of the values are below the threshold
+                    for (size_t i = 0; i < correlationResult.size(); i++)
+                    {
+                        if (correlationResult[i] > CORRELATION_THRESHOLD)
+                        {
+                            unlock++;
+                        }
+                    }
+                }
+
+                // sprintf(display_buffer, "Similarity: %f", similarity);
+                // lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                // lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                // lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                // lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+
+                if (unlock==3) // TODO: need to find a better threshold
+                {
                     sprintf(display_buffer, "UNLOCK: SUCCESS");
                     lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
                     lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
                     lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
                     lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
-                    unlocking_record.clear();
+                    
                     green_led = 1;
                     red_led = 0;
+
+                    // ThisThread::sleep_for(3s);
+
+                    // sprintf(display_buffer, "R:x=%3fy=%3fz=%3f", correlationResult[0], correlationResult[1], correlationResult[2]);
+                    // lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                    // lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                    // lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                    // lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+
+                    unlocking_record.clear();
+                    unlock = 0;
+                }
+                else
+                {
+                    sprintf(display_buffer, "UNLOCK: FAILED");
+                    lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                    lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                    lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                    lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+
+                    green_led = 0;
+                    red_led = 1;
+
+                    // ThisThread::sleep_for(3s);
+
+                    // sprintf(display_buffer, "R:x=%3fy=%3fz=%3f", correlationResult[0], correlationResult[1], correlationResult[2]);
+                    // lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
+                    // lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
+                    // lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
+                    // lcd.DisplayStringAt(text_x, text_y, (uint8_t *)display_buffer, CENTER_MODE);
+
+                    unlocking_record.clear();
+                    unlock = 0;
                 }
             }
         }
@@ -403,8 +445,7 @@ void touch_screen_thread()
             // Check if the touch is inside record button
             if (is_touch_inside_button(touch_x, touch_y, button2_x, button2_y, button1_width, button1_height))
             {
-                // printf("========[Recording after 1 seconds....]========\r\n");
-                sprintf(display_buffer, "Recording in 1s...");
+                sprintf(display_buffer, "Recording Initiated...");
                 lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
                 lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
                 lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
@@ -416,8 +457,7 @@ void touch_screen_thread()
             // Check if the touch is inside unlock button
             if (is_touch_inside_button(touch_x, touch_y, button1_x, button1_y, button2_width, button2_height))
             {
-                // printf("========[Unlock Recording after 1 seconds....]========\r\n");
-                sprintf(display_buffer, "Unlocking in 1s...");
+                sprintf(display_buffer, "Unlocking Initiated...");
                 lcd.SetTextColor(LCD_COLOR_BLACK);                  // Set the color to the background color
                 lcd.FillRect(0, text_y, lcd.GetXSize(), FONT_SIZE); // Clear a specific line
                 lcd.SetTextColor(LCD_COLOR_BLUE);                   // Reset the text color
@@ -522,14 +562,14 @@ bool is_touch_inside_button(int touch_x, int touch_y, int button_x, int button_y
  * @return the euclidean distance between the two vectors
  *
  * ****************************************************************************/
-float euclidean_distance(const std::array<float, 3> &a, const std::array<float, 3> &b)
+float euclidean_distance(const array<float, 3> &a, const array<float, 3> &b)
 {
     float sum = 0;
     for (size_t i = 0; i < 3; ++i)
     {
         sum += (a[i] - b[i]) * (a[i] - b[i]);
     }
-    return std::sqrt(sum);
+    return sqrt(sum);
 }
 
 /*******************************************************************************
@@ -540,9 +580,9 @@ float euclidean_distance(const std::array<float, 3> &a, const std::array<float, 
  * @return the DTW distance between the two vectors
  *
  * ****************************************************************************/
-float dtw(const std::vector<std::array<float, 3>> &s, const std::vector<std::array<float, 3>> &t)
+float dtw(const vector<array<float, 3>> &s, const vector<array<float, 3>> &t)
 {
-    std::vector<std::vector<float>> dtw_matrix(s.size() + 1, std::vector<float>(t.size() + 1, std::numeric_limits<float>::infinity()));
+    vector<vector<float>> dtw_matrix(s.size() + 1, vector<float>(t.size() + 1, numeric_limits<float>::infinity()));
 
     dtw_matrix[0][0] = 0;
 
@@ -551,9 +591,122 @@ float dtw(const std::vector<std::array<float, 3>> &s, const std::vector<std::arr
         for (size_t j = 1; j <= t.size(); ++j)
         {
             float cost = euclidean_distance(s[i - 1], t[j - 1]);
-            dtw_matrix[i][j] = cost + std::min({dtw_matrix[i - 1][j], dtw_matrix[i][j - 1], dtw_matrix[i - 1][j - 1]});
+            dtw_matrix[i][j] = cost + min({dtw_matrix[i - 1][j], dtw_matrix[i][j - 1], dtw_matrix[i - 1][j - 1]});
         }
     }
 
     return dtw_matrix[s.size()][t.size()];
+}
+
+/*******************************************************************************
+ *
+ * @brief Trim the gyro data
+ * @param data: the gyro data to trim
+ *
+ * ****************************************************************************/
+void trim_gyro_data(vector<array<float, 3>> &data)
+{
+    float threshold = 0.00001;
+    auto ptr = data.begin();
+    // find the first element where data from any
+    // one direction is larger than the threshold
+    while (abs((*ptr)[0]) <= threshold && abs((*ptr)[1]) <= threshold && abs((*ptr)[2]) <= threshold)
+    {
+        ptr++;
+    }
+    if (ptr == data.end())
+        return;      // all data less than threshold
+    auto lptr = ptr; // record the left bound
+    // start searching from end to front
+    ptr = data.end() - 1;
+    while (abs((*ptr)[0]) <= threshold && abs((*ptr)[1]) <= threshold && abs((*ptr)[2]) <= threshold)
+    {
+        ptr--;
+    }
+    auto rptr = ptr; // record the right bound
+    // start moving elements to the front
+    auto replace_ptr = data.begin();
+    for (; replace_ptr != lptr && lptr <= rptr; replace_ptr++, lptr++)
+    {
+        *replace_ptr = *lptr;
+    }
+    // trim the end
+    if (lptr > rptr)
+    {
+        data.erase(replace_ptr, data.end());
+    }
+    else
+    {
+        data.erase(rptr + 1, data.end());
+    }
+}
+
+/*******************************************************************************
+ *
+ * @brief Calculate the correlation between two vectors
+ * @param a: the first vector
+ * @param b: the second vector
+ * @return the correlation between the two vectors
+ *
+ * ****************************************************************************/
+float correlation(const vector<float> &a, const vector<float> &b)
+{
+    if (a.size() != b.size())
+    {
+        err = -1;
+        return 0.0f;
+    }
+
+    float sum_a = 0, sum_b = 0, sum_ab = 0, sq_sum_a = 0, sq_sum_b = 0;
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        sum_a += a[i];
+        sum_b += b[i];
+        sum_ab += a[i] * b[i];
+        sq_sum_a += a[i] * a[i];
+        sq_sum_b += b[i] * b[i];
+    }
+
+    size_t n = a.size();
+    float numerator = n * sum_ab - sum_a * sum_b;
+    float denominator = sqrt((n * sq_sum_a - sum_a * sum_a) * (n * sq_sum_b - sum_b * sum_b));
+    return numerator / denominator;
+}
+
+/*******************************************************************************
+ *
+ * @brief Calculate the correlation between two vectors
+ * @param a: the first vector
+ * @param b: the second vector
+ * @return the correlation between the two vectors
+ *
+ * ****************************************************************************/
+array<float, 3> calculateCorrelationVectors(vector<array<float, 3>>& vec1, vector<array<float, 3>>& vec2) {
+    array<float, 3> result;
+
+    // Calculate the correlation for each coordinate
+    for (int i = 0; i < 3; i++) {
+        vector<float> a;
+        vector<float> b;
+
+        // Populate 'a' and 'b' with the ith coordinates of vec1 and vec2
+        for (const auto& arr : vec1) {
+            a.push_back(arr[i]);
+        }
+        for (const auto& arr : vec2) {
+            b.push_back(arr[i]);
+        }
+
+        // Resize 'a' to match the size of 'b', if necessary
+        if (a.size() > b.size()) {
+            a.resize(b.size(), 0);
+        } else if (b.size() > a.size()) {
+            b.resize(a.size(), 0);
+        }
+
+        // Calculate the correlation and store the result
+        result[i] = correlation(a, b);
+    }
+
+    return result;
 }
